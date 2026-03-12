@@ -1,0 +1,17 @@
+# Core (shared with API)
+-r requirements-api.txt
+
+# AI/ML
+openai==1.42.0
+numpy==1.26.4
+
+# Image Processing
+pillow==11.0.0
+imutils==0.5.4
+
+# Web Scraping & Browser Automation
+selenium==4.21.0
+undetected-chromedriver==3.5.4
+
+# Extra OSINT CLI
+subprocess32==3.5.4

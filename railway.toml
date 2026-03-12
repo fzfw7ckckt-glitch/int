@@ -1,0 +1,20 @@
+# Railway build config for OSINT Platform API
+# Deploys the FastAPI backend (Dockerfile.api)
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.api"
+
+watchPatterns = [
+  "app/**",
+  "requirements-api.txt",
+  "Dockerfile.api",
+  "railway.toml",
+]
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 60
+# Use Dockerfile CMD (start.sh) so PORT is expanded inside container
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

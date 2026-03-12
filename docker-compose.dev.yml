@@ -1,0 +1,105 @@
+version: '3.8'
+
+# This file overrides docker-compose.yml for development
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      cache_from:
+        - osint-api:latest
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DEBUG: "true"
+    volumes:
+      - ./app:/app/app  # Hot reload on code changes
+      - ./tests:/app/tests
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    command: celery -A app.tasks.celery_app worker --loglevel=debug --without-gossip --without-mingle --without-heartbeat
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DEBUG: "true"
+    volumes:
+      - ./app:/app/app  # Hot reload
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    command: npm run dev
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    volumes:
+      - ./web/pages:/app/pages
+      - ./web/components:/app/components
+      - ./web/public:/app/public
+    ports:
+      - "3000:3000"
+
+  postgres:
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_INITDB_ARGS: "-c log_statement=all -c log_min_duration_statement=0"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    command: redis-server --loglevel debug
+
+  # Development tools
+  adminer:
+    image: adminer:latest
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    networks:
+      - osint-net
+
+  # pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@osint.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - osint-net
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+  # Redis Commander for Redis management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - osint-net
+
+volumes:
+  pgadmin_data:

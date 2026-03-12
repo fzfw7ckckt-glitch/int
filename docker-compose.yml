@@ -1,0 +1,324 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: osint-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-osint}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-osint_secure_password}
+      POSTGRES_DB: ${DB_NAME:-osint}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-osint} -d ${DB_NAME:-osint}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - osint-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: osint-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_secure_password} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secure_password}", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - osint-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  tor:
+    image: osminogin/tor-simple:latest
+    container_name: osint-tor
+    ports:
+      - "9050:9050"  # SOCKS5 proxy
+      - "9051:9051"  # Control port
+    environment:
+      TOR_LOG_LEVEL: "notice"
+    networks:
+      - osint-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: osint-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database
+      DATABASE_URL: postgresql://${DB_USER:-osint}:${DB_PASSWORD:-osint_secure_password}@postgres:5432/${DB_NAME:-osint}
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secure_password}@redis:6379/0
+      
+      # Celery
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secure_password}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis_secure_password}@redis:6379/1
+      
+      # JWT Security
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      
+      # API Keys
+      PIMEYES_API_KEY: ${PIMEYES_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      SHODAN_API_KEY: ${SHODAN_API_KEY}
+      HIBP_API_KEY: ${HIBP_API_KEY}
+      DEHASHED_API_KEY: ${DEHASHED_API_KEY}
+      BREACH_DIRECTORY_API_KEY: ${BREACH_DIRECTORY_API_KEY}
+      GARANTEX_API_KEY: ${GARANTEX_API_KEY}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TOR_PROXY: socks5h://tor:9050
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY}
+      MINIMAX_API_URL: ${MINIMAX_API_URL:-https://api.minimax.io/v1}
+      GEOSPY_API_KEY: ${GEOSPY_API_KEY}
+      PICARTA_API_KEY: ${PICARTA_API_KEY}
+      YOUCONTROL_API_KEY: ${YOUCONTROL_API_KEY}
+
+      # SIGINT keys
+      CENSYS_API_ID: ${CENSYS_API_ID}
+      CENSYS_API_SECRET: ${CENSYS_API_SECRET}
+      FOFA_TOKEN: ${FOFA_TOKEN}
+      ZOOMEYE_API_KEY: ${ZOOMEYE_API_KEY}
+      SECURITYTRAILS_KEY: ${SECURITYTRAILS_KEY}
+      BINARYEDGE_KEY: ${BINARYEDGE_KEY}
+      CRIMINAL_IP_KEY: ${CRIMINAL_IP_KEY}
+      GREYNOISE_KEY: ${GREYNOISE_KEY}
+      ONYPHE_API_KEY: ${ONYPHE_API_KEY}
+      NETLAS_API_KEY: ${NETLAS_API_KEY}
+
+      # HUMINT keys
+      HUNTER_API_KEY: ${HUNTER_API_KEY}
+      SOCIAL_LINKS_KEY: ${SOCIAL_LINKS_KEY}
+      TALKWALKER_KEY: ${TALKWALKER_KEY}
+      HUNCHLY_KEY: ${HUNCHLY_KEY}
+
+      # Leaks keys
+      HUDSON_ROCK_KEY: ${HUDSON_ROCK_KEY}
+      SPYCLOUD_KEY: ${SPYCLOUD_KEY}
+      INTEL_X_KEY: ${INTEL_X_KEY}
+      LEAK_LOOKUP_KEY: ${LEAK_LOOKUP_KEY}
+
+      # Threat Intel keys
+      VIRUSTOTAL_API_KEY: ${VIRUSTOTAL_API_KEY}
+      ALIENVAULT_KEY: ${ALIENVAULT_KEY}
+      ABUSEIPDB_KEY: ${ABUSEIPDB_KEY}
+      HYBRID_ANALYSIS_KEY: ${HYBRID_ANALYSIS_KEY}
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    
+    volumes:
+      - ./app:/app/app
+      - ./reports:/reports
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks:
+      - osint-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: osint-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      tor:
+        condition: service_started
+    environment:
+      # Database
+      DATABASE_URL: postgresql://${DB_USER:-osint}:${DB_PASSWORD:-osint_secure_password}@postgres:5432/${DB_NAME:-osint}
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secure_password}@redis:6379/0
+      
+      # Celery
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secure_password}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis_secure_password}@redis:6379/1
+      
+      # Security
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      
+      # API Keys
+      PIMEYES_API_KEY: ${PIMEYES_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      SHODAN_API_KEY: ${SHODAN_API_KEY}
+      HIBP_API_KEY: ${HIBP_API_KEY}
+      DEHASHED_API_KEY: ${DEHASHED_API_KEY}
+      BREACH_DIRECTORY_API_KEY: ${BREACH_DIRECTORY_API_KEY}
+      GARANTEX_API_KEY: ${GARANTEX_API_KEY}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TOR_PROXY: socks5h://tor:9050
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY}
+      MINIMAX_API_URL: ${MINIMAX_API_URL:-https://api.minimax.io/v1}
+      GEOSPY_API_KEY: ${GEOSPY_API_KEY}
+      PICARTA_API_KEY: ${PICARTA_API_KEY}
+      YOUCONTROL_API_KEY: ${YOUCONTROL_API_KEY}
+
+      # SIGINT keys
+      CENSYS_API_ID: ${CENSYS_API_ID}
+      CENSYS_API_SECRET: ${CENSYS_API_SECRET}
+      FOFA_TOKEN: ${FOFA_TOKEN}
+      ZOOMEYE_API_KEY: ${ZOOMEYE_API_KEY}
+      SECURITYTRAILS_KEY: ${SECURITYTRAILS_KEY}
+      BINARYEDGE_KEY: ${BINARYEDGE_KEY}
+      CRIMINAL_IP_KEY: ${CRIMINAL_IP_KEY}
+      GREYNOISE_KEY: ${GREYNOISE_KEY}
+      ONYPHE_API_KEY: ${ONYPHE_API_KEY}
+      NETLAS_API_KEY: ${NETLAS_API_KEY}
+
+      # HUMINT keys
+      HUNTER_API_KEY: ${HUNTER_API_KEY}
+      SOCIAL_LINKS_KEY: ${SOCIAL_LINKS_KEY}
+      TALKWALKER_KEY: ${TALKWALKER_KEY}
+      HUNCHLY_KEY: ${HUNCHLY_KEY}
+
+      # Leaks keys
+      HUDSON_ROCK_KEY: ${HUDSON_ROCK_KEY}
+      SPYCLOUD_KEY: ${SPYCLOUD_KEY}
+      INTEL_X_KEY: ${INTEL_X_KEY}
+      LEAK_LOOKUP_KEY: ${LEAK_LOOKUP_KEY}
+
+      # Threat Intel keys
+      VIRUSTOTAL_API_KEY: ${VIRUSTOTAL_API_KEY}
+      ALIENVAULT_KEY: ${ALIENVAULT_KEY}
+      ABUSEIPDB_KEY: ${ABUSEIPDB_KEY}
+      HYBRID_ANALYSIS_KEY: ${HYBRID_ANALYSIS_KEY}
+
+      # Chrome/Selenium settings
+      CHROME_BIN: /usr/bin/chromium-browser
+      CHROME_HEADLESS: "true"
+      CHROME_DISABLE_GPU: "true"
+      
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    
+    volumes:
+      - ./app:/app/app
+      - ./reports:/reports
+      - /dev/shm:/dev/shm  # Shared memory for Chrome
+    networks:
+      - osint-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: osint-web
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NODE_ENV: production
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    networks:
+      - osint-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Nginx reverse proxy for production
+  nginx:
+    image: nginx:alpine
+    container_name: osint-nginx
+    depends_on:
+      - api
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    networks:
+      - osint-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles: ["prod"]
+
+networks:
+  osint-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
